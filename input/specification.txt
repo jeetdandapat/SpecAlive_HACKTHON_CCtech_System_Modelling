@@ -1,0 +1,3 @@
+A motor drives a shaft.
+The shaft is connected to a wheel.
+The wheel rotates when the motor is activated.
