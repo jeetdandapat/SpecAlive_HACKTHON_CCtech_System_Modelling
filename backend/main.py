@@ -1,8 +1,9 @@
 from backend.inputs import load_specification
+from backend.config import LLM_PROVIDER
+from backend.config import LLM_MODEL
 
 
 def main():
-    # Step 1: Read engineering specification
     document = load_specification()
 
     print("Input Spec     :")
@@ -13,6 +14,9 @@ def main():
 
     print("\nSpec SHA-256   :")
     print(document.sha256)
+
+    print("LLM_PROVIDER:", LLM_PROVIDER)
+    print("LLM_MODEL",LLM_MODEL)
 
 
 if __name__ == "__main__":
