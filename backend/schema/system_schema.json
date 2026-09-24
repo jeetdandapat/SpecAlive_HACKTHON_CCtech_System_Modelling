@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SpecAliveStructuredSystemModel",
+  "description": "Structured Intermediate Representation (IR) for engineering system models. Serves as the single source of truth for both SysML v2 and Modelica generation.",
+  "type": "object",
+  "required": [
+    "system_name",
+    "description",
+    "components",
+    "connections",
+    "assumptions",
+    "missing_information"
+  ],
+  "properties": {
+    "system_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+      "description": "Identifier for the engineering system model (alphanumeric with underscores, valid across SysML and Modelica)."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable summary of the system architecture, function, and purpose."
+    },
+    "source_references": {
+      "type": "array",
+      "description": "Citations or textual excerpts from the original engineering specification providing evidence for the model.",
+      "items": {
+        "type": "object",
+        "required": ["id", "text"],
+        "properties": {
+          "id": { "type": "string" },
+          "section": { "type": "string" },
+          "text": { "type": "string" }
+        }
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "Explicit engineering assumptions made during extraction (e.g., component simplifications, ideal behavior, default parameters). Never fabricate unrecorded physics.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "missing_information": {
+      "type": "array",
+      "description": "Genuinely unknown, ambiguous, or unstated specifications from the natural-language input that are needed for full modeling or simulation.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "parameters": {
+      "type": "array",
+      "description": "Global or system-level parameters (e.g., ambient conditions, supply limits).",
+      "items": {
+        "$ref": "#/$defs/Parameter"
+      }
+    },
+    "states": {
+      "type": "array",
+      "description": "Operational, supervisory, or discrete behavioral states of the system.",
+      "items": {
+        "$ref": "#/$defs/State"
+      }
+    },
+    "transitions": {
+      "type": "array",
+      "description": "State transitions linking system operational states.",
+      "items": {
+        "$ref": "#/$defs/Transition"
+      }
+    },
+    "components": {
+      "type": "array",
+      "description": "Physical, electrical, mechanical, or logical components comprising the system.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "ports"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "description": "Unique component instance identifier within the system."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the component."
+          },
+          "type": {
+            "type": "string",
+            "description": "Component classification or domain type (e.g., Resistor, DC_Motor, Inertia, Switch)."
+          },
+          "library_reference": {
+            "type": "string",
+            "description": "Standard library component reference (e.g., Modelica Standard Library path or SysML v2 standard part def)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Description of component role or function."
+          },
+          "source_reference": {
+            "type": "string",
+            "description": "Specification quote or section from which this component was derived."
+          },
+          "parameters": {
+            "type": "array",
+            "description": "Physical parameters belonging to this component.",
+            "items": {
+              "$ref": "#/$defs/Parameter"
+            }
+          },
+          "ports": {
+            "type": "array",
+            "description": "Interaction interface points (electrical pins, mechanical flanges, fluid ports, signal ports).",
+            "items": {
+              "$ref": "#/$defs/Port"
+            }
+          },
+          "states": {
+            "type": "array",
+            "description": "Internal component discrete states (if component-specific).",
+            "items": {
+              "$ref": "#/$defs/State"
+            }
+          },
+          "transitions": {
+            "type": "array",
+            "description": "Internal component state transitions (if component-specific).",
+            "items": {
+              "$ref": "#/$defs/Transition"
+            }
+          }
+        }
+      }
+    },
+    "connections": {
+      "type": "array",
+      "description": "Topological connections linking component ports (representing physical interactions or signal flows).",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "source_port",
+          "target_port"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique connection identifier."
+          },
+          "source_port": {
+            "type": "string",
+            "description": "Fully qualified ID of the source port (<component_id>.<port_name>)."
+          },
+          "target_port": {
+            "type": "string",
+            "description": "Fully qualified ID of the target port (<component_id>.<port_name>)."
+          },
+          "domain": {
+            "type": "string",
+            "description": "Physical interaction domain (e.g., electrical, mechanical_rotational, signal)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Engineering rationale or description of the connection."
+          },
+          "source_reference": {
+            "type": "string",
+            "description": "Specification quote supporting this connection."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "Parameter": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Parameter symbol or identifier (e.g., R, J, V_nom, k)."
+        },
+        "value": {
+          "type": [
+            "number",
+            "string",
+            "boolean",
+            "null"
+          ],
+          "description": "Explicit parameter value, symbolic expression, or null if genuinely unknown."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Engineering unit (e.g., Ohm, V, s, rad/s, kg.m2, N.m/A)."
+        },
+        "description": {
+          "type": "string",
+          "description": "Functional description or context of the parameter."
+        },
+        "source_reference": {
+          "type": "string",
+          "description": "Specification quote or source reference justifying the value."
+        },
+        "is_assumption": {
+          "type": "boolean",
+          "description": "True if this value is an assumed or estimated engineering quantity rather than directly stated."
+        },
+        "uncertainty": {
+          "type": "string",
+          "description": "Tolerance, confidence range, or explicit uncertainty description (e.g., '+/- 5%', 'unverified estimate')."
+        }
+      }
+    },
+    "Port": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "port_type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Fully qualified port identifier (<component_id>.<port_name>)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Local port name (e.g., p, n, flange_a, flange_b, in, out)."
+        },
+        "port_type": {
+          "type": "string",
+          "description": "Port classification (e.g., electrical_pin, mechanical_rotational_flange, mechanical_translational_flange, fluid_port, signal_input, signal_output, thermal_port)."
+        },
+        "domain": {
+          "type": "string",
+          "description": "Physical domain (electrical, rotational_mechanics, translational_mechanics, thermal, fluid, control)."
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "in",
+            "out",
+            "inout"
+          ],
+          "description": "Flow direction for signal ports or conservative interface direction."
+        },
+        "description": {
+          "type": "string",
+          "description": "Interface notes or physical port characteristics."
+        }
+      }
+    },
+    "State": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique state identifier (e.g., OFF, STARTING, RUNNING, FAULTED)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name of the state."
+        },
+        "is_initial": {
+          "type": "boolean",
+          "default": false,
+          "description": "Indicates whether this state is the initial operational state."
+        },
+        "description": {
+          "type": "string",
+          "description": "Behavior or mode characteristics in this state."
+        }
+      }
+    },
+    "Transition": {
+      "type": "object",
+      "required": [
+        "id",
+        "from_state",
+        "to_state"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique transition identifier."
+        },
+        "from_state": {
+          "type": "string",
+          "description": "Identifier of the source state."
+        },
+        "to_state": {
+          "type": "string",
+          "description": "Identifier of the target state."
+        },
+        "trigger": {
+          "type": "string",
+          "description": "Event or input condition triggering the transition."
+        },
+        "guard": {
+          "type": "string",
+          "description": "Boolean condition that must be satisfied for transition."
+        },
+        "action": {
+          "type": "string",
+          "description": "Actions or state variable assignments executed during transition."
+        },
+        "description": {
+          "type": "string",
+          "description": "Engineering context or operational explanation."
+        }
+      }
+    }
+  }
+}
+ 
