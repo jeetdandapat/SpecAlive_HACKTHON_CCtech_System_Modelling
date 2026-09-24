@@ -31,6 +31,26 @@ Used AI for guidance in understanding JSON Schema structure, field definitions, 
 Used AI for guidance in understanding validation logic, JSON Schema validation, and organizing validation checks.
 
 
+#### Model Analysis Layer
+
+Implemented the model analysis layer to identify and organize facts, assumptions, and missing information from the validated engineering model.
+
+Used AI to understand how the model analysis should be structured and how the identified information should be organized.
+
+
+### SysML Generation Layer
+
+Added the workflow for creating SysML v2 models from the validated engineering data. Integrated the AI client to generate the SysML representation and prepared the output for .sysml file storage.
+
+Used AI to understand SysML v2 generation requirements and improve the generation workflow and output handling.
+
+
+### Modelica Generation Layer
+
+Added the workflow for creating Modelica models from the validated engineering data. Integrated the AI client to generate the Modelica representation and prepared the output for .mo file storage.
+
+Used AI to understand Modelica generation requirements and improve the generation workflow and output handling.
+
 
 
 

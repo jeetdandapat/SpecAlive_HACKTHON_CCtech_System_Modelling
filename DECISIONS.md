@@ -15,3 +15,9 @@ D7 | Added the structured model validation layer | Added validation checks for t
 
 D8 | Added the main processing pipeline | Connected the specification input, AI extraction, and structured validation into a single processing flow, while keeping future generation stages for later updates.
 
+D9 | Added the model analysis layer | Organized validated model information for further processing
+
+D10 | Added the SysML generation layer | Used the validated model to generate SysML v2 code through AI
+
+D11 | Added the Modelica generation layer | Used the validated  model  to generate Modelica code through AI
+

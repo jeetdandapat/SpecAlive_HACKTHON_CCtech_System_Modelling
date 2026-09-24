@@ -1,3 +1,57 @@
-A motor drives a shaft.
-The shaft is connected to a wheel.
-The wheel rotates when the motor is activated.
+SYNTHETIC ENGINEERING DATA - HACKATHON USE Page 1
+User Requirement Specification - Two-Tank Sequence
+Controller
+Document URS-001
+Revision A
+Date 15 Jan 2026
+Status Released - baseline, subject to approved changes
+Classification Synthetic hackathon artifact
+1. Purpose and Scope
+The package controls a demonstration liquid-transfer process consisting of two tanks, three actuated
+isolation valves, two level measurements and three operator pushbuttons. The controller is expected to
+execute the normal sequence automatically once started and to support pause/resume and controlled
+shutdown commands.
+2. System Identification
+Project tag Description Common alias
+TK-101 Tank 1 tank1 / T1
+TK-102 Tank 2 tank2 / T2
+XV-101 Inlet valve to Tank 1 valve1 / V1
+XV-102 Transfer valve Tank 1 to Tank 2 valve2 / V2
+XV-103 Tank 2 drain valve valve3 / V3
+PLC-101 Sequence controller tankController
+3. Functional Requirements
+URS-F-001 - START shall initiate automatic operation when the system is in its initial condition.
+URS-F-002 - Normal operation shall fill Tank 1 by opening V1.
+URS-F-003 - V1 shall close when Tank 1 reaches the specified high-level limit.
+URS-F-004 - After a 10 s waiting period, V2 shall open and transfer liquid from Tank 1 to Tank 2.
+URS-F-005 - V2 shall close when Tank 1 reaches its minimum operating level.
+URS-F-006 - After a 10 s waiting period, V3 shall open and drain Tank 2.
+URS-F-007 - V3 shall close when Tank 2 reaches its minimum operating level.
+URS-F-008 - The automatic process shall continue cyclically unless stopped or shut down.
+URS-M-001 - STOP shall close all three valves and suspend automatic operation until another operator command is
+received.
+URS-M-002 - START after STOP shall continue the process operation rather than force a new empty-cycle
+initialization.
+URS-M-003 - SHUT shall empty both tanks by opening V2 and V3 and shall inhibit V1.
+URS-M-004 - When shutdown emptying is achieved, V2 and V3 shall close and the controller shall return to the start
+configuration.
+SYNTHETIC ENGINEERING DATA - HACKATHON USE Page 2
+4. Initial Engineering Setpoints
+The following values were agreed for the Rev A baseline. Approved engineering changes issued after this
+document take precedence.
+Parameter Rev A value Unit Comment
+Tank 1 initial level 0.05 m Demo initialization
+Tank 2 initial level 0.05 m Demo initialization
+Tank 1 high limit 0.78 m Subject to later controls tuning
+Tank 1 low limit 0.05 m Residual heel
+Tank 2 low limit 0.05 m Residual heel
+Wait after T1 high 10 s No valve open during wait
+Wait after T1 low 10 s No valve open during wait
+Wait after T2 low 10 s Before next automatic fill cycle
+5. Interfaces
+Level measurements LT-101 and LT-102 shall be available to PLC-101. START, STOP and SHUT are
+momentary commands. Valve commands are binary open/closed outputs. The supplier shall provide
+actuators that fail closed on loss of power.
+6. Verification Intent
+Sequence operation, stop/resume behavior and controlled shutdown shall be demonstrated in simulation.
+The exact demonstration command schedule will be issued in the validation procedure.
