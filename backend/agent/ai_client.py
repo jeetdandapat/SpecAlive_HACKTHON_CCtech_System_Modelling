@@ -1,13 +1,4 @@
-"""AI client adapter layer for SpecAlive Phase 1.
 
-Provides a provider-agnostic wrapper around AI LLM APIs.
-Provider-specific code is isolated here.
-
-Supported providers:
-    openai
-    gemini
-    groq
-"""
 
 import json
 import logging
@@ -17,9 +8,7 @@ from typing import Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
 # AI ERRORS
-# ============================================================
 
 class AIClientError(Exception):
     """Raised when an AI API call fails unexpectedly."""
@@ -60,9 +49,7 @@ class AIRateLimitError(AIClientError):
         self.quota_description = quota_description
 
 
-# ============================================================
 # MESSAGE
-# ============================================================
 
 class Message:
     """Lightweight message container for LLM conversations."""
@@ -78,9 +65,7 @@ class Message:
         }
 
 
-# ============================================================
 # BASE AI CLIENT
-# ============================================================
 
 class BaseAIClient(ABC):
     """Abstract interface for all AI provider clients."""
@@ -98,9 +83,7 @@ class BaseAIClient(ABC):
         pass
 
 
-# ============================================================
 # OPENAI CLIENT
-# ============================================================
 
 class OpenAIClient(BaseAIClient):
     """OpenAI API client adapter."""
@@ -205,9 +188,7 @@ class OpenAIClient(BaseAIClient):
             ) from exc
 
 
-# ============================================================
 # GEMINI CLIENT
-# ============================================================
 
 class GeminiClient(BaseAIClient):
     """Google Gemini API client adapter."""
@@ -336,9 +317,7 @@ class GeminiClient(BaseAIClient):
             ) from exc
 
 
-# ============================================================
 # GROQ CLIENT
-# ============================================================
 
 class GroqClient(BaseAIClient):
     """Groq API client adapter."""
@@ -440,9 +419,7 @@ class GroqClient(BaseAIClient):
             ) from exc
 
 
-# ============================================================
-# STEP 4.3 — PROVIDER FACTORY
-# ============================================================
+# PROVIDER FACTORY
 
 def build_client(
     provider: str,
