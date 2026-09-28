@@ -2,4 +2,5 @@
 
 The system diagram was created and visualized using SysML v2 modeling tool.
 
-file:///C:/Users/JEET%20DANDAPAT/Downloads/view1%20(1).svg
+
+[System Diagram](docs\view1 (1).svg)
