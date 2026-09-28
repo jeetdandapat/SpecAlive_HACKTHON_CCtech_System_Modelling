@@ -21,3 +21,4 @@ D10 | Added the SysML generation layer | Used the validated model to generate Sy
 
 D11 | Added the Modelica generation layer | Used the validated  model  to generate Modelica code through AI
 
+D12 | SysML Generation & Requirement Traceability Enhancement | Updated the SysML generation approach to properly handle attributes, ports, connections, constraints, states, transitions, actions, and requirement traceability, with validation

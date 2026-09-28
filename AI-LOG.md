@@ -51,7 +51,9 @@ Added the workflow for creating Modelica models from the validated engineering d
 
 Used AI to understand Modelica generation requirements and improve the generation workflow and output handling.
 
+### SysML Generation Layer Updated
 
+Initially, the SysML code was being generated using AI. After reviewing existing SysML code from GitHub as a reference, updated the implementation so that SysML is now generated directly from the validated model, making the generation more structured and consistent. 
 
 
 
