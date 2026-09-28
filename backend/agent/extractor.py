@@ -21,6 +21,7 @@ from backend.agent.prompts import (
     PROMPT_VERSION,
     format_extraction_prompts,
 )
+from backend.agent.groq_schema import groq_strict_schema
 
 from backend.config import config
 from backend.inputs.base import SpecificationDocument
@@ -225,6 +226,243 @@ def _strip_json_fences(text: str) -> str:
     return text
 
 
+def _normalize_string_lists(ir: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize common compact AI shapes without asserting missing semantics."""
+    # Keep IR collection fields canonical: local validators and generators
+    # consume lists, while strict-schema responses may represent empty optional
+    # collections as null. Null here means no entries were extracted.
+    for field in (
+        "source_references", "requirements", "constraints", "assumptions",
+        "missing_information", "parameters", "states", "transitions",
+        "components", "connections",
+    ):
+        if ir.get(field) is None and field in ir:
+            ir[field] = []
+    for component in ir.get("components", []) if isinstance(ir.get("components"), list) else []:
+        if not isinstance(component, dict):
+            continue
+        for field in ("parameters", "ports", "states", "transitions"):
+            if component.get(field) is None and field in component:
+                component[field] = []
+
+    for field in ("assumptions", "missing_information"):
+        values = ir.get(field)
+        if not isinstance(values, list):
+            continue
+        normalized = []
+        changed = False
+        for value in values:
+            if isinstance(value, str):
+                normalized.append(value)
+                continue
+            changed = True
+            if isinstance(value, dict):
+                item = value.get("item")
+                reason = value.get("reason")
+                if item is not None and reason is not None:
+                    normalized.append(f"{item}: {reason}")
+                elif item is not None:
+                    normalized.append(str(item))
+                else:
+                    normalized.append("; ".join(
+                        f"{key}: {json.dumps(detail, ensure_ascii=False) if isinstance(detail, (dict, list)) else detail}"
+                        for key, detail in value.items()
+                    ))
+            else:
+                normalized.append(json.dumps(value, ensure_ascii=False))
+        if changed:
+            logger.warning(
+                "Normalized non-string entries in IR field '%s' to schema strings",
+                field,
+            )
+            ir[field] = normalized
+
+    # Ports have a canonical, domain-neutral identity and type fallback.
+    for component in ir.get("components", []) if isinstance(ir.get("components"), list) else []:
+        if not isinstance(component, dict) or not isinstance(component.get("ports"), list):
+            continue
+        component_id = component.get("id") or component.get("name")
+        for port in component["ports"]:
+            if not isinstance(port, dict):
+                continue
+            port_name = port.get("name")
+            if port_name and not port.get("id") and component_id:
+                port["id"] = f"{component_id}.{port_name}"
+                logger.warning("Generated missing port id from its component and local name")
+            if port_name and not port.get("port_type"):
+                port["port_type"] = "interface"
+                logger.warning("Assigned neutral 'interface' type to a port missing port_type")
+
+    requirements = ir.get("requirements")
+    if isinstance(requirements, list):
+        used_ids = {
+            str(item.get("id")) for item in requirements
+            if isinstance(item, dict) and item.get("id")
+        }
+        normalized_requirements = []
+        sequence = 1
+        for item in requirements:
+            if not isinstance(item, str):
+                normalized_requirements.append(item)
+                continue
+            while f"SPEC-{sequence:03d}" in used_ids:
+                sequence += 1
+            normalized_requirements.append({
+                "id": f"SPEC-{sequence:03d}",
+                "text": item,
+                "covered_by": [],
+                "status": "not_covered",
+            })
+            used_ids.add(f"SPEC-{sequence:03d}")
+            sequence += 1
+            logger.warning("Preserved prose requirement as not_covered because no IR mapping was supplied")
+        ir["requirements"] = normalized_requirements
+
+    # Parameters: if the model returns a null unit, normalize it to an
+    # empty string. This preserves the fact that the unit is unknown without
+    # inventing an engineering unit, while satisfying the schema type.
+    parameters = ir.get("parameters")
+    if isinstance(parameters, list):
+        for parameter in parameters:
+            if not isinstance(parameter, dict):
+                continue
+            if "unit" in parameter and parameter.get("unit") is None:
+                parameter["unit"] = ""
+                logger.warning(
+                    "Normalized null parameter unit to empty string"
+                )
+
+    constraints = ir.get("constraints")
+    if isinstance(constraints, list):
+        used_ids = {
+            str(item.get("id")) for item in constraints
+            if isinstance(item, dict) and item.get("id")
+        }
+        normalized_constraints = []
+        sequence = 1
+        for item in constraints:
+            if not isinstance(item, str):
+                normalized_constraints.append(item)
+                continue
+            while f"constraint_{sequence:03d}" in used_ids:
+                sequence += 1
+            normalized_constraints.append({
+                "id": f"constraint_{sequence:03d}",
+                "description": item,
+            })
+            used_ids.add(f"constraint_{sequence:03d}")
+            sequence += 1
+            logger.warning("Preserved prose constraint as descriptive text; no formal expression was supplied")
+        ir["constraints"] = normalized_constraints
+    return ir
+
+
+def _normalize_structural_references(ir: Dict[str, Any]) -> Dict[str, Any]:
+    """Repair only deterministic IR structure; never invent engineering meaning."""
+    components = ir.get("components")
+    if not isinstance(components, list):
+        return ir
+
+    # Component type is a required structural field in the system schema.
+    # Prefer an already-present semantic field; otherwise use the neutral
+    # structural value "component" rather than inventing an engineering class.
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        if not component.get("type"):
+            fallback_type = (
+                component.get("kind")
+                or component.get("category")
+                or "component"
+            )
+            component["type"] = str(fallback_type)
+            logger.warning(
+                "Normalized missing component type for '%s' -> '%s'",
+                component.get("id", "<unknown>"),
+                component["type"],
+            )
+
+    port_ids = set()
+    local_name_to_ids = {}
+
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        component_id = component.get("id")
+        ports = component.get("ports")
+        if not component_id or not isinstance(ports, list):
+            continue
+        for port in ports:
+            if not isinstance(port, dict):
+                continue
+            port_id = port.get("id")
+            port_name = port.get("name")
+            if port_id:
+                port_ids.add(str(port_id))
+            if port_name:
+                local_name_to_ids.setdefault(str(port_name), []).append(
+                    f"{component_id}.{port_name}"
+                )
+
+    connections = ir.get("connections")
+    if isinstance(connections, list):
+        used_ids = {
+            str(x.get("id")) for x in connections
+            if isinstance(x, dict) and x.get("id")
+        }
+        number = 1
+        for connection in connections:
+            if not isinstance(connection, dict):
+                continue
+            if not connection.get("id"):
+                while f"conn_{number:03d}" in used_ids:
+                    number += 1
+                connection["id"] = f"conn_{number:03d}"
+                used_ids.add(connection["id"])
+                number += 1
+                logger.warning(
+                    "Generated missing connection id '%s'",
+                    connection["id"],
+                )
+
+            for field in ("source_port", "target_port"):
+                endpoint = connection.get(field)
+                if not isinstance(endpoint, str):
+                    continue
+                endpoint = endpoint.strip()
+                if endpoint in port_ids:
+                    connection[field] = endpoint
+                    continue
+                candidates = local_name_to_ids.get(endpoint, [])
+                if len(candidates) == 1:
+                    connection[field] = candidates[0]
+                    logger.warning(
+                        "Qualified %s '%s' -> '%s'",
+                        field, endpoint, candidates[0],
+                    )
+
+    constraints = ir.get("constraints")
+    if isinstance(constraints, list):
+        for index, constraint in enumerate(constraints, start=1):
+            if not isinstance(constraint, dict):
+                continue
+            if not constraint.get("id"):
+                constraint["id"] = f"constraint_{index:03d}"
+                logger.warning(
+                    "Generated missing constraint id '%s'",
+                    constraint["id"],
+                )
+            if not constraint.get("description"):
+                expression = constraint.get("expression")
+                if isinstance(expression, str) and expression.strip():
+                    constraint["description"] = expression.strip()
+                    logger.warning(
+                        "Copied existing constraint expression into missing description"
+                    )
+
+    return ir
+
+
 # Specification Extractor
 
 class SpecificationExtractor:
@@ -351,7 +589,16 @@ class SpecificationExtractor:
                 messages=messages,
                 temperature=config.ai.temperature,
                 timeout=config.ai.timeout,
+
+                # Keep the initial extraction request within Groq's
+                # 8000 TPM organization limit.
+                max_tokens=5000,
+
+                # JSON mode is sufficient here.
+                # The local StructuredValidator performs the authoritative
+                # schema validation after the response is received.
                 json_mode=True,
+                json_schema=None,
             )
 
         except AIAuthenticationError as error:
@@ -379,6 +626,136 @@ class SpecificationExtractor:
             )
 
         return raw
+
+    def _repair_incomplete_ir(
+        self,
+        specification_text: str,
+        partial_ir: Dict[str, Any],
+        validation_summary: str,
+    ) -> str:
+        """
+        Perform one compact IR repair request.
+
+        If the extracted IR has zero components, include the source
+        specification because a schema-valid empty component list is not
+        useful for SysML generation. The large Groq strict schema is never
+        resent during repair.
+        """
+
+        compact_validation = validation_summary[:2500]
+
+        compact_ir = json.dumps(
+            partial_ir,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+        if len(compact_ir) > 14000:
+            logger.warning(
+                "Partial IR is large (%s chars); truncating repair context.",
+                len(compact_ir),
+            )
+            compact_ir = compact_ir[:14000]
+
+        components = partial_ir.get("components")
+        needs_component_repair = (
+            not isinstance(components, list)
+            or len(components) == 0
+        )
+
+        source_context = ""
+        if needs_component_repair:
+            source_context = (
+                "SOURCE SPECIFICATION:\n"
+                f"{specification_text[:7000]}\n\n"
+            )
+
+        system_text = (
+            "You are repairing a previously extracted engineering IR. "
+            "Return ONLY one complete JSON object. "
+            "Use the source specification as authoritative evidence. "
+            "Do not invent facts, values, connections, ports, states, or behavior. "
+            "Preserve valid information already present in the IR. "
+            "Required root fields are: system_name, description, "
+            "components, connections, assumptions, missing_information, "
+            "requirements, constraints. "
+            "Use [] for genuinely empty arrays. "
+            "assumptions and missing_information must contain plain strings. "
+            "STRUCTURAL RULES: every component MUST have id, name, and type. "
+            "The type field must always be a non-empty string; if the source "
+            "does not specify a more specific class, use the neutral value "
+            "'component' rather than omitting the field. "
+            "Every port must have id, name, and port_type; port id MUST be "
+            "component_id.port_name. Every connection MUST have id, "
+            "source_port, and target_port. Both connection endpoints MUST "
+            "be exact existing port ids from components; never use bare local "
+            "port names. Never create a connection to a missing port. Never "
+            "connect a port to itself unless explicitly stated in the source. "
+            "Every constraint MUST have id and description. If an existing "
+            "expression is present but description is missing, use that "
+            "expression as the description. Do not create dummy ports such as "
+            "magnetic_port or ground_port merely to satisfy a connection. "
+            "If an endpoint cannot be supported by the source, remove that "
+            "unsupported connection and record the missing information instead."
+        )
+
+        if needs_component_repair:
+            system_text += (
+                " IMPORTANT: The previous IR contains zero components. "
+                "Extract every explicitly named or clearly described physical "
+                "or logical engineering element from the source specification "
+                "as a component. Do not leave components empty when the source "
+                "describes engineering elements. Create ports only for stated "
+                "interfaces or connections."
+            )
+
+        messages = [
+            Message(
+                role="system",
+                content=system_text,
+            ),
+            Message(
+                role="user",
+                content=(
+                    "VALIDATION / REPAIR REASONS:\n"
+                    f"{compact_validation}\n\n"
+                    f"{source_context}"
+                    "PARTIAL IR:\n"
+                    f"{compact_ir}\n\n"
+                    "TASK:\n"
+                    "Return the complete repaired IR. "
+                    "Ensure engineering elements supported by the source "
+                    "are represented as components. Before returning JSON, "
+                    "verify that every component has id, name, and non-empty "
+                    "type; every connection endpoint exactly matches a real "
+                    "port id; no connection is self-referential; and every "
+                    "constraint has id and description. "
+                    "Return raw JSON only."
+                ),
+            ),
+        ]
+
+        try:
+            response = self._get_client().complete(
+                messages=messages,
+                temperature=0.0,
+                timeout=config.ai.timeout,
+                max_tokens=3500,
+                json_mode=True,
+                json_schema=None,
+            )
+
+        except AIClientError as error:
+            raise ExtractionError(
+                f"AI IR repair request failed: {error}"
+            ) from error
+
+        if not response or not response.strip():
+            raise ExtractionError(
+                "AI returned an empty response while repairing incomplete IR"
+            )
+
+        return response
 
     # JSON Parsing
 
@@ -468,17 +845,64 @@ class SpecificationExtractor:
 
         # Step 2: Parse JSON
 
-        raw_ir = self._parse_json(
-            raw_response
+        raw_ir = _normalize_string_lists(
+            self._parse_json(raw_response)
+        )
+        raw_ir = _normalize_structural_references(raw_ir)
+
+        # Step 3: Structured + semantic validation.
+        validation_result = self._validator.validate(raw_ir)
+
+        components = raw_ir.get("components")
+        no_components = (
+            not isinstance(components, list)
+            or len(components) == 0
         )
 
-        # Step 3: Structured validation
+        # JSON Schema may legally allow an empty components array, but SysML
+        # generation cannot proceed without at least one engineering element.
+        needs_repair = (
+            validation_result.status == ValidationStatus.FAIL
+            or no_components
+        )
 
-        validation_result = (
-            self._validator.validate(
-                raw_ir
+        if needs_repair:
+            if no_components:
+                logger.warning(
+                    "AI extraction produced zero components; "
+                    "requesting focused semantic repair for SysML generation."
+                )
+            else:
+                logger.warning(
+                    "AI extraction failed schema validation; "
+                    "requesting one focused compact repair."
+                )
+
+            repair_summary = validation_result.summary()
+
+            if no_components:
+                repair_summary += (
+                    "\nSemantic validation error: components must not be empty "
+                    "when the engineering specification describes system elements."
+                )
+
+            raw_response = self._repair_incomplete_ir(
+                spec_doc.raw_text,
+                raw_ir,
+                repair_summary,
             )
-        )
+
+            logger.info(
+                "Received repaired AI response (%s chars)",
+                len(raw_response),
+            )
+
+            raw_ir = _normalize_string_lists(
+                self._parse_json(raw_response)
+            )
+            raw_ir = _normalize_structural_references(raw_ir)
+
+            validation_result = self._validator.validate(raw_ir)
 
         # Step 4: Reject invalid output
 

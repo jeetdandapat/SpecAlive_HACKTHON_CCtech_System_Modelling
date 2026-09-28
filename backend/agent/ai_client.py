@@ -3,7 +3,7 @@
 import json
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class BaseAIClient(ABC):
         timeout: int = 60,
         max_tokens: int = 8192,
         json_mode: bool = False,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Send messages and return the AI response."""
         pass
@@ -123,11 +124,21 @@ class OpenAIClient(BaseAIClient):
         timeout: int = 60,
         max_tokens: int = 8192,
         json_mode: bool = False,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
 
         kwargs = {}
 
-        if json_mode:
+        if json_schema:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "specalive_ir",
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            }
+        elif json_mode:
             kwargs["response_format"] = {
                 "type": "json_object"
             }
@@ -228,6 +239,7 @@ class GeminiClient(BaseAIClient):
         timeout: int = 60,
         max_tokens: int = 8192,
         json_mode: bool = False,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
 
         import google.generativeai as genai
@@ -355,11 +367,21 @@ class GroqClient(BaseAIClient):
         timeout: int = 60,
         max_tokens: int = 8192,
         json_mode: bool = False,
+        json_schema: Optional[Dict[str, Any]] = None,
     ) -> str:
 
         kwargs = {}
 
-        if json_mode:
+        if json_schema:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "specalive_ir",
+                    "strict": True,
+                    "schema": json_schema,
+                },
+            }
+        elif json_mode:
             kwargs["response_format"] = {
                 "type": "json_object"
             }
@@ -372,7 +394,9 @@ class GroqClient(BaseAIClient):
                     for message in messages
                 ],
                 temperature=temperature,
-                max_tokens=max_tokens,
+                # Groq recommends max_completion_tokens for reasoning models
+                # such as GPT-OSS. This budget includes the full completion.
+                max_completion_tokens=max_tokens,
                 timeout=timeout,
                 **kwargs,
             )

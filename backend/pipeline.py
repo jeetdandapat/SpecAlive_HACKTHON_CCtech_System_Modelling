@@ -45,6 +45,7 @@ from backend.validators.structured_validator import (
     ValidationResult,
     ValidationStatus,
 )
+from backend.validators.requirements import validate_requirement_coverage
 
 logger = logging.getLogger("spec_alive.pipeline")
 
@@ -57,6 +58,7 @@ class PipelineStatus(str, Enum):
     VALIDATION_FAILED = "VALIDATION_FAILED"
     EXTRACTION_FAILED = "EXTRACTION_FAILED"
     INPUT_ERROR = "INPUT_ERROR"
+    GENERATION_FAILED = "GENERATION_FAILED"
 
 
 # Pipeline result
@@ -131,6 +133,15 @@ class PipelineResult:
                 f"States Modeled      : "
                 f"{len(ir.get('states', []))}"
             )
+            requirements = ir.get("requirements", [])
+            if isinstance(requirements, list):
+                covered = sum(
+                    1 for item in requirements
+                    if isinstance(item, dict) and item.get("status") == "covered"
+                )
+                lines.append(
+                    f"Requirements Traced : {covered}/{len(requirements)} marked covered"
+                )
 
         if self.audit_review:
             lines.extend(
@@ -344,6 +355,17 @@ def run_pipeline(
     try:
         extraction_result = extractor.extract(spec_doc)
 
+        requirement_errors = validate_requirement_coverage(
+            spec_doc.raw_text,
+            extraction_result.ir,
+        )
+        if requirement_errors:
+            message = (
+                "Requirement traceability warning (review only): "
+                + "; ".join(requirement_errors)
+            )
+            logger.warning(message)
+
         # Save accepted structured output
         saved_paths = extraction_result.save(
             structured_dir=config.output_structured_dir,
@@ -399,6 +421,7 @@ def run_pipeline(
 
         # Generate SysML
         sysml_path: Optional[Path] = None
+        sysml_error: Optional[str] = None
 
         try:
             sysml_generator = SysMLv2Generator(
@@ -418,42 +441,64 @@ def run_pipeline(
             )
 
         except SysMLGenerationError as sysml_err:
+            sysml_error = str(sysml_err)
             logger.error(
                 f"SysML generation failed "
-                f"(pipeline still succeeded): "
+                f"(structured extraction succeeded): "
                 f"{sysml_err}"
             )
 
         # Generate Modelica
         modelica_path: Optional[Path] = None
+        modelica_error: Optional[str] = None
 
-        try:
-            modelica_generator = ModelicaGenerator(
-                client=client
-            )
+        if sysml_path is not None:
+            try:
+                modelica_generator = ModelicaGenerator(
+                    client=client
+                )
 
-            modelica_path = modelica_generator.save(
-                extraction_result.ir,
-                output_dir=config.output_modelica_dir,
-                filename=system_name,
-                spec_text=spec_doc.raw_text,
-            )
+                modelica_path = modelica_generator.save(
+                    extraction_result.ir,
+                    output_dir=config.output_modelica_dir,
+                    filename=system_name,
+                    spec_text=spec_doc.raw_text,
+                )
 
-            logger.info(
-                f"Generated Modelica output -> "
-                f"{modelica_path}"
-            )
+                logger.info(
+                    f"Generated Modelica output -> "
+                    f"{modelica_path}"
+                )
 
-        except ModelicaGenerationError as mo_err:
-            logger.error(
-                f"Modelica generation failed "
-                f"(pipeline still succeeded): "
-                f"{mo_err}"
-            )
+            except ModelicaGenerationError as mo_err:
+                modelica_error = str(mo_err)
+                logger.error(
+                    f"Modelica generation failed "
+                    f"(SysML generation succeeded): "
+                    f"{mo_err}"
+                )
+        else:
+            logger.info("Skipping Modelica because SysML generation did not succeed")
 
-        # Return successful result
+        # Return result.
+        #
+        # Requirement coverage is a review/traceability warning in Phase 1,
+        # not a hard pipeline failure. The structured validator above remains
+        # strict: invalid IR still raises ExtractionValidationError and stops
+        # the pipeline.
+        #
+        # Therefore:
+        #   - requirement_errors -> WARNING only
+        #   - sysml/modelica generation errors -> GENERATION_FAILED
+        #   - otherwise -> SUCCESS
+        pipeline_status = (
+            PipelineStatus.GENERATION_FAILED
+            if sysml_error or modelica_error
+            else PipelineStatus.SUCCESS
+        )
+
         return PipelineResult(
-            status=PipelineStatus.SUCCESS,
+            status=pipeline_status,
             spec_doc=spec_doc,
             extraction_result=extraction_result,
             validation_result=(
@@ -467,6 +512,9 @@ def run_pipeline(
                 "raw_response"
             ],
             audit_report_path=audit_path,
+            error_message="; ".join(
+                [error for error in (sysml_error, modelica_error) if error]
+            ) or None,
             timestamp=ts,
         )
 

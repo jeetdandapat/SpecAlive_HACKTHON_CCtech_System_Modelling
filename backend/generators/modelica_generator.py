@@ -59,6 +59,59 @@ class ModelicaGenerator:
                 "IR field 'connections' must be a list"
             )
 
+    @staticmethod
+    def _generation_view(model: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop bulky evidence quotes while preserving model semantics."""
+        parameter_fields = ("name", "value", "data_type", "unit", "description", "is_assumption", "uncertainty")
+        port_fields = ("id", "name", "port_type", "domain", "direction", "description")
+        state_fields = ("id", "name", "is_initial", "description")
+        transition_fields = ("id", "from_state", "to_state", "trigger", "guard", "action", "description")
+
+        def pick(item: Dict[str, Any], fields: tuple[str, ...]) -> Dict[str, Any]:
+            return {key: item[key] for key in fields if key in item}
+
+        def selected(items: Any, fields: tuple[str, ...]) -> list[Dict[str, Any]]:
+            return [pick(item, fields) for item in items or [] if isinstance(item, dict)]
+
+        components = []
+        for item in model.get("components", []):
+            if not isinstance(item, dict):
+                continue
+            component = {key: item[key] for key in ("id", "name", "type", "library_reference", "description") if key in item}
+            component["ports"] = selected(item.get("ports"), port_fields)
+            component["parameters"] = selected(item.get("parameters"), parameter_fields)
+            component["states"] = selected(item.get("states"), state_fields)
+            component["transitions"] = selected(item.get("transitions"), transition_fields)
+            components.append(component)
+
+        result: Dict[str, Any] = {
+            "system_name": model["system_name"],
+            "description": model["description"],
+            "components": components,
+            "connections": [
+                {key: item[key] for key in ("id", "source_port", "target_port", "domain", "description") if key in item}
+                for item in model.get("connections", []) if isinstance(item, dict)
+            ],
+            "parameters": selected(model.get("parameters"), parameter_fields),
+            "states": selected(model.get("states"), state_fields),
+            "transitions": selected(model.get("transitions"), transition_fields),
+            "constraints": [
+                {key: item[key] for key in ("id", "expression", "description", "source_reference") if key in item}
+                for item in model.get("constraints", []) if isinstance(item, dict)
+            ],
+            "assumptions": model.get("assumptions", []),
+            "missing_information": model.get("missing_information", []),
+            "requirements": [
+                {key: item[key] for key in ("id", "text", "covered_by", "status") if key in item}
+                for item in model.get("requirements", []) if isinstance(item, dict)
+            ],
+            "source_references": [
+                {key: item[key] for key in ("id", "section") if key in item}
+                for item in model.get("source_references", []) if isinstance(item, dict)
+            ],
+        }
+        return result
+
     def generate(
         self,
         model: Dict[str, Any],
@@ -77,9 +130,9 @@ class ModelicaGenerator:
             # Validate IR first.
             self._validate_model(model)
 
-            # Convert complete validated IR to compact JSON.
+            # Omit long evidence quotes and extraction-only metadata to reduce TPM use.
             ir_json = json.dumps(
-                model,
+                self._generation_view(model),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )

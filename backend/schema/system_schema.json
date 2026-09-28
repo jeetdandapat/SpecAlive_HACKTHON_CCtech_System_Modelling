@@ -9,7 +9,9 @@
     "components",
     "connections",
     "assumptions",
-    "missing_information"
+    "missing_information",
+    "requirements",
+    "constraints"
   ],
   "properties": {
     "system_name": {
@@ -31,6 +33,42 @@
           "id": { "type": "string" },
           "section": { "type": "string" },
           "text": { "type": "string" }
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "description": "Traceability matrix for explicit requirements in the source specification. covered_by values must identify IR elements (component IDs, component.port IDs, component.parameter names, connection IDs, state IDs, or transition IDs).",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "covered_by", "status"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 1 },
+          "covered_by": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          },
+          "status": {
+            "type": "string",
+            "enum": ["covered", "partial", "not_covered"]
+          },
+          "source_reference": { "type": "string" }
+        }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "description": "Explicit equations, invariants, limits, or logical relations required by the source specification. Expressions must use declared IR identifiers and must not add unstated behavior.",
+      "items": {
+        "type": "object",
+        "required": ["id", "description"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "expression": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "source_reference": { "type": "string" }
         }
       }
     },
@@ -181,7 +219,8 @@
       "type": "object",
       "required": [
         "name",
-        "value"
+        "value",
+        "data_type"
       ],
       "properties": {
         "name": {
@@ -196,6 +235,11 @@
             "null"
           ],
           "description": "Explicit parameter value, symbolic expression, or null if genuinely unknown."
+        },
+        "data_type": {
+          "type": "string",
+          "enum": ["Real", "Integer", "Boolean", "String", "Complex"],
+          "description": "SysML scalar type selected from the meaning of the quantity, including when the value is unknown."
         },
         "unit": {
           "type": "string",
@@ -324,4 +368,3 @@
     }
   }
 }
- 

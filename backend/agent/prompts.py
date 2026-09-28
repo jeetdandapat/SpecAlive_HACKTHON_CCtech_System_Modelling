@@ -7,7 +7,7 @@ from typing import Dict, Optional, Tuple
 
 # Prompt Version
 
-PROMPT_VERSION = "1.3.0"
+PROMPT_VERSION = "1.9.0"
 
 
 # Load Canonical System Schema
@@ -38,6 +38,27 @@ try:
         ).keys()
     )
 
+    def _schema_shapes(node, path="$", defs=None):
+        """Compact presence checklist; the API schema remains authoritative."""
+        defs = defs or _SCHEMA_SUMMARY.get("$defs", {})
+        shapes = []
+        if not isinstance(node, dict):
+            return shapes
+        if "$ref" in node:
+            return _schema_shapes(defs.get(node["$ref"].rsplit("/", 1)[-1], {}), path, defs)
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            shapes.append(f"{path}: " + ", ".join(properties))
+            for key, value in properties.items():
+                item = value.get("items") if isinstance(value, dict) else None
+                if isinstance(item, dict) and ("properties" in item or "$ref" in item):
+                    shapes.extend(_schema_shapes(item, f"{path}.{key}[]", defs))
+                elif isinstance(value, dict) and "$ref" in value:
+                    shapes.extend(_schema_shapes(value, f"{path}.{key}", defs))
+        return shapes
+
+    _SCHEMA_SHAPE_HINT = "\n".join(_schema_shapes(_SCHEMA_SUMMARY))
+
 except Exception:
 
     _REQUIRED_FIELDS = [
@@ -58,6 +79,7 @@ except Exception:
             "transitions",
         ]
     )
+    _SCHEMA_SHAPE_HINT = ""
 
 
 # Legacy Extraction Prompt — v1.2.0
@@ -108,8 +130,11 @@ Example:
   do NOT invent a value.
 - Record unstated required parameters in
   missing_information.
-- Every declared parameter must contain:
-  name, value, and unit.
+- Every declared parameter must contain all properties listed by the
+  JSON Schema: name, value, data_type, unit, description,
+  source_reference, is_assumption, and uncertainty. Use null for
+  unsupported optional scalar properties; do not omit them. The required
+  engineering fields are name, value, and data_type.
 
 5. DO NOT INVENT EQUATIONS OR PHYSICAL BEHAVIOUR
 
@@ -264,11 +289,19 @@ from the specification text alone.
 - Determine component type from the text.
 - Do not assign unsupported domain-specific types.
 - Extract stated parameters, ports and interfaces.
+- Create the components and interfaces needed to represent each
+  stated physical part and interaction. Do not treat requirement text,
+  assumptions, or comments as a substitute for an engineering element.
 
 3. PARAMETER EXTRACTION
 
 - Extract numerical values, units or symbolic
   expressions exactly as stated.
+- Set data_type to a SysML scalar type (Real,
+  Integer, Boolean, String, or Complex) based on the quantity's
+  meaning. Always provide it, including when value is
+  null. Use Real for measured/continuous quantities;
+  use Integer only for discrete counts or indices.
 - If a parameter is mentioned but its value
   is not provided:
 
@@ -300,9 +333,12 @@ from the specification text alone.
 
 5. CONNECTION EXTRACTION
 
-- Create a connection only when the specification
-  explicitly states that components interact
-  or are linked.
+- Create a connection when the specification states
+  or clearly describes a flow/interaction path between
+  components. Narrative series, branch, split, merge,
+  transfer, and return paths count as topology evidence
+  even without a literal "connect" sentence. Do not infer
+  a path from proximity alone.
 
 - Every connection must contain:
 
@@ -317,6 +353,23 @@ from the specification text alone.
 
 - Extract only operational states explicitly
   described by the specification.
+- When requirements describe an ordered sequence
+  using conditions such as after, when, until, or
+  then, represent those stated phases as states
+  and their stated conditions as transitions.
+- Preserve explicit cyclic, stop/resume, and
+  shutdown/return-to-start behavior as transitions
+  when the text specifies it; do not leave these
+  requirements uncovered just because the document
+  does not provide a diagram.
+- Do not invent guards, triggers, timing values,
+  or initial states. Record genuinely missing
+  control details in missing_information.
+- Guard and trigger fields must be concise model
+  expressions/events, never free-form prose. Every
+  identifier used must be declared in the IR. If a
+  required signal or quantity is absent, record the
+  gap instead of inventing an expression.
 
 - Every state must contain:
 
@@ -360,6 +413,10 @@ Record every:
 - missing engineering quantity
 
 in missing_information.
+Each entry in `missing_information` must be one plain
+string. Do not use objects with `item`, `reason`, or
+other keys. Combine the item and explanation into one
+string. `assumptions` must also contain plain strings.
 
 9. ASSUMPTIONS
 
@@ -385,15 +442,17 @@ using:
 11. OUTPUT FORMAT
 
 - Output valid JSON only.
-- Follow the system schema exactly.
+- Follow the JSON Schema supplied with the API request exactly.
+- Include every property required by that schema. Use null for
+  optional scalar fields that are not supported by the source, and []
+  for arrays with no extracted entries.
+- Object property presence checklist (all listed keys must appear):
+{_SCHEMA_SHAPE_HINT}
 - No markdown.
 - No code fences.
 - No conversational text.
 - No explanations.
 
-12. SYSTEM SCHEMA
-
-{json.dumps(_SCHEMA_SUMMARY)}
 """
 
 
@@ -416,7 +475,14 @@ Extraction Checklist:
    Extract only what the text names or describes.
 
 3. Parameters:
-   Extract name, value and unit from the text.
+   Extract the schema-defined name, value, data_type, unit, description,
+   source_reference, is_assumption, and uncertainty properties. Include
+   every property; use null for optional scalar properties unsupported by
+   the source. Required fields are name, value, and data_type.
+   Every parameter must also include data_type using
+   Real, Integer, Boolean, String, or Complex, including when
+   its value is unknown. Treat continuous quantities
+   as Real and discrete counts as Integer.
    If value is missing, use null and record it
    in missing_information.
 
@@ -431,7 +497,11 @@ Extraction Checklist:
    existing port IDs.
 
 6. States and transitions:
-   Extract only what the specification describes.
+   Extract what the specification describes. For
+   explicitly ordered sequence phases, create
+   states and transitions from its stated conditions.
+   Include cycle, stop/resume, and shutdown behavior
+   when stated; do not invent control details.
 
 7. Missing information:
    Record every missing engineering detail.
@@ -442,11 +512,51 @@ Extraction Checklist:
 9. Traceability:
    Preserve source references.
 
-10. Topology:
+   Also extract every explicit requirement as an item in `requirements`:
+   - id: the requirement ID from the source, or a stable SPEC-### ID
+   - text: the requirement text, preserving its meaning
+   - covered_by: exact IDs of existing IR elements that implement or
+     partially support it. This schema field is the IR-element mapping.
+   - status: covered, partial, or not_covered
+   - source_reference: section or source location when present
+   `covered_by` may contain only IDs present in this IR: component IDs,
+   fully qualified port IDs (`<component_id>.<port_name>`), component
+   parameter IDs (`<component_id>.<parameter_name>`), global parameter
+   names, connection IDs, state IDs, transition IDs, or constraint IDs.
+   Before finalizing, check every mapped ID against the extracted elements;
+   never create a mapping from a requirement ID, source reference, prose,
+   assumption, or comment. Every requirement marked `covered` or `partial`
+   MUST have at least one valid `covered_by` ID. Include all relevant
+   existing elements that support the requirement. A requirement with no
+   supporting engineering element must be `not_covered` with `covered_by: []`.
+   Extract the actual engineering elements needed by the source before
+   assigning coverage: represent stated components and interfaces, physical
+   connections and flow paths, quantities as parameters, equations and
+   relations as constraints, and explicitly described behavior as states
+   and transitions. Traceability text alone is never an implementation.
+   A component, parameter value, or connection supports a requirement only
+   when it actually represents the stated behavior or relation. Mark
+   `covered` only when the complete observable behavior or relation is
+   represented. Mark `partial` when at least one real IR element represents
+   part of it but logic, equations, interfaces, or boundary conditions are
+   missing; record those gaps in `missing_information` without silently
+   assuming them.
+
+10. CONSTRAINTS AND EQUATIONS
+
+   Extract explicit equations, inequalities, limits,
+   invariants, and logical relations into `constraints`
+   with id, expression, description, and source_reference
+   when available. Use only declared IR identifiers.
+   Do not invent formulas from prose. If a precise
+   expression cannot be formed, record the missing data
+   and leave the requirement partial or not_covered.
+
+11. Topology:
     Verify that every connection references
     an existing port.
 
-11. Format:
+12. Format:
     Output ONLY raw JSON.
 """
 
@@ -454,194 +564,70 @@ Extraction Checklist:
 # SysML v2 Generation Prompts
 
 SYSML_GENERATION_SYSTEM_PROMPT = """
-You are a certified Systems Modeling Engineer
-specialising in SysML v2 textual notation.
+You are a Systems Modeling Engineer specializing in SysML v2.
 
-Your task is to generate a complete,
-syntactically correct SysML v2 textual
-representation (.sysml) from the supplied
-validated System Model JSON.
+Generate valid SysML v2 source code from the provided Intermediate Representation (IR).
 
-=== MANDATORY RULES ===
-
-1. USE ONLY THE IR
-
-Do not invent any:
-
-- component
-- port
-- parameter
-- connection
-- state
-- transition
-
-If information is missing, do not fabricate it.
-
-2. COMPLETE COVERAGE
-
-Every component, port, parameter, connection,
-state and transition in the IR must appear
-in the output.
-
-3. VALID SYSML v2 SYNTAX
-
-Use standard SysML v2 textual notation.
-
-4. NULL / MISSING VALUES
-
-Render missing parameter values as:
-
-unknown
-
-and include:
-
-// MISSING: value not provided in specification
-
-5. TRACEABILITY
-
-Preserve:
-
-- source_references
-- assumptions
-- missing_information
-
-as comments.
-
-6. NO EXTRA TEXT
-
-Output ONLY SysML v2 source code.
-
-No markdown fences.
-No explanations.
-No conversational text.
-"""
+Rules:
+- IR is the single source of truth.
+- Preserve every component, port, parameter, connection, state, and transition.
+- Create appropriate ports for connected components.
+- Create semantic connections between related ports.
+- Preserve source, target, and direction from the IR.
+- Every IR connection must appear as a SysML v2 connect statement.
+- Use the IR connection ID as the connection name when possible.
+- Ensure every connection references valid existing ports.
+- Do not invent components, ports, parameters, connections, states, transitions, or behavior.
+- Do not leave defined connections disconnected.
+- Use generic modeling patterns.
+- Do not hard-code a specific engineering domain.
+- Return only valid SysML v2 source code.
+""".strip()
 
 
 SYSML_GENERATION_USER_TEMPLATE = """
-Generate SysML v2 textual notation (.sysml)
-from the COMPLETE validated System Model IR.
+Generate SysML v2 source code from the complete Intermediate Representation (IR).
 
 The IR is the single source of truth.
 
-=== SYSTEM MODEL IR (JSON) ===
+=== IR ===
 
 {ir_json}
 
-=== END OF IR ===
+=== END IR ===
 
 Requirements:
-
-- Read the complete IR before generating code.
-- Output ONLY SysML v2 source code.
-- Cover every component.
-- Cover every port.
-- Cover every parameter.
-- Cover every connection.
-- Cover every state.
-- Cover every transition.
+- Include every component.
+- Include every port.
+- Include every parameter.
+- Include every connection.
+- Include every state.
+- Include every transition.
+- For every IR connection, generate:
+  connection <id> connect <source_port> to <target_port>;
+- Preserve source, target, and direction exactly.
+- Use appropriate ports for connected components.
 - Do not invent information.
-- Preserve missing_information.
-- Preserve assumptions.
-- Preserve source_references.
-"""
+- Return only SysML v2 source code.
+""".strip()
 
 
 # Modelica Generation Prompts
 
 MODELICA_GENERATION_SYSTEM_PROMPT = """
-You are a certified Systems Modeling Engineer
-specialising in Modelica.
-
-Your task is to generate a complete,
-syntactically correct Modelica model (.mo)
-from the supplied validated System Model JSON.
-
-=== MANDATORY RULES ===
-
-1. USE ONLY THE IR
-
-Do not invent:
-
-- components
-- parameters
-- connectors
-- equations
-- physical behaviour
-
-2. COMPLETE COVERAGE
-
-Every component, parameter, port/connector,
-connection, state and transition in the IR
-must be represented.
-
-3. VALID MODELICA SYNTAX
-
-Use standard Modelica syntax.
-
-4. EQUATIONS
-
-Do not invent physical equations.
-
-Only use equations explicitly represented
-in the IR.
-
-5. NULL / MISSING VALUES
-
-Declare missing parameters without fabricated
-default values and add a missing comment.
-
-6. LIBRARY REFERENCES
-
-If a library_reference is present in the IR,
-use it directly.
-
-7. TRACEABILITY
-
-Preserve:
-
-- source_references
-- assumptions
-- missing_information
-
-as comments.
-
-8. NO EXTRA TEXT
-
-Output ONLY Modelica source code.
-
-No markdown.
-No explanations.
-No conversational text.
+Generate syntactically valid Modelica from the supplied IR JSON. Represent every
+component, parameter, port, connection, state, transition, assumption, missing
+item, constraint, and source reference. Preserve explicit constraints as equations;
+use only stated values and equations; invent no
+physics. Unknown values get no fabricated defaults and should be marked in a
+comment. Use library_reference when present. Output only Modelica source code.
 """
 
 
 MODELICA_GENERATION_USER_TEMPLATE = """
-Generate Modelica source code (.mo) from the
-COMPLETE validated System Model IR.
-
-The IR is the single source of truth.
-
-=== SYSTEM MODEL IR (JSON) ===
-
+Generate complete Modelica source for this IR. Preserve all model semantics;
+do not invent components, values, or behavior. Output source only.
 {ir_json}
-
-=== END OF IR ===
-
-Requirements:
-
-- Read the complete IR.
-- Output ONLY Modelica source code.
-- Cover every component.
-- Cover every connector.
-- Cover every parameter.
-- Cover every connection.
-- Cover every state.
-- Cover every transition.
-- Do not invent information.
-- Do not invent physical equations.
-- Preserve missing_information.
-- Preserve assumptions.
-- Preserve source_references.
 """
 
 
@@ -660,6 +646,65 @@ class PromptVersionInfo:
 # Prompt Registry
 
 PROMPT_REGISTRY: Dict[str, PromptVersionInfo] = {
+
+    "1.9.0": PromptVersionInfo(
+        version="1.9.0",
+        system_prompt=SYSTEM_PROMPT_V1_3,
+        user_template=USER_PROMPT_TEMPLATE_V1_3,
+        description=(
+            "Requirement traceability requires valid IDs for actual "
+            "engineering elements in the extracted IR."
+        ),
+    ),
+
+    "1.8.0": PromptVersionInfo(
+        version="1.8.0",
+        system_prompt=SYSTEM_PROMPT_V1_3,
+        user_template=USER_PROMPT_TEMPLATE_V1_3,
+        description=(
+            "Parameter extraction instructions aligned with every property "
+            "required by Groq strict JSON Schema output."
+        ),
+    ),
+
+    "1.7.0": PromptVersionInfo(
+        version="1.7.0",
+        system_prompt=SYSTEM_PROMPT_V1_3,
+        user_template=USER_PROMPT_TEMPLATE_V1_3,
+        description=(
+            "Domain-agnostic extraction aligned with strict JSON Schema output."
+        ),
+    ),
+
+    "1.6.0": PromptVersionInfo(
+        version="1.6.0",
+        system_prompt=SYSTEM_PROMPT_V1_3,
+        user_template=USER_PROMPT_TEMPLATE_V1_3,
+        description=(
+            "Domain-agnostic extraction with formal constraints, "
+            "typed quantities, strict traceability, and schema-shaped lists."
+        ),
+    ),
+
+    "1.5.0": PromptVersionInfo(
+        version="1.5.0",
+        system_prompt=SYSTEM_PROMPT_V1_3,
+        user_template=USER_PROMPT_TEMPLATE_V1_3,
+        description=(
+            "Domain-agnostic extraction with formal constraints, "
+            "declared expression references, and stricter coverage."
+        ),
+    ),
+
+    "1.4.0": PromptVersionInfo(
+        version="1.4.0",
+        system_prompt=SYSTEM_PROMPT_V1_3,
+        user_template=USER_PROMPT_TEMPLATE_V1_3,
+        description=(
+            "Domain-agnostic extraction prompt with explicit "
+            "requirement-to-model traceability coverage."
+        ),
+    ),
 
     "1.3.0": PromptVersionInfo(
         version="1.3.0",
