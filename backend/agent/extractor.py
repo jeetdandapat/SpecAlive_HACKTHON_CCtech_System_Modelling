@@ -21,8 +21,6 @@ from backend.agent.prompts import (
     PROMPT_VERSION,
     format_extraction_prompts,
 )
-from backend.agent.groq_schema import groq_strict_schema
-
 from backend.config import config
 from backend.inputs.base import SpecificationDocument
 from backend.validators.structured_validator import (
@@ -357,6 +355,82 @@ def _normalize_string_lists(ir: Dict[str, Any]) -> Dict[str, Any]:
     return ir
 
 
+def _normalize_optional_nulls(
+    ir: Dict[str, Any],
+    schema: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Normalize null values dynamically using the canonical IR schema.
+
+    Optional scalar/object fields with null are omitted because the canonical
+    validator treats their declared type as non-nullable. Optional arrays are
+    normalized to empty lists. Required fields remain untouched so the
+    authoritative validator can report them as invalid when necessary.
+
+    This function is schema-driven and does not hard-code field names such as
+    ``library_reference``. Local ``$defs`` references are resolved recursively.
+    """
+    if not isinstance(ir, dict) or not isinstance(schema, dict):
+        return ir
+
+    defs = schema.get("$defs", {})
+
+    def resolve(node: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(node, dict):
+            return {}
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            name = ref.rsplit("/", 1)[-1]
+            target = defs.get(name)
+            if isinstance(target, dict):
+                merged = dict(target)
+                merged.update({k: v for k, v in node.items() if k != "$ref"})
+                return merged
+        return node
+
+    def walk(value: Any, node: Dict[str, Any]) -> Any:
+        node = resolve(node)
+
+        if value is None:
+            return None
+
+        node_type = node.get("type")
+
+        if node_type == "object" and isinstance(value, dict):
+            properties = node.get("properties", {})
+            required = set(node.get("required", []))
+            cleaned: Dict[str, Any] = {}
+
+            for key, item in value.items():
+                prop_schema = properties.get(key)
+
+                if item is None:
+                    # Required nulls must reach the validator so they are
+                    # reported instead of being silently repaired.
+                    if key in required:
+                        cleaned[key] = None
+                    else:
+                        logger.warning(
+                            "Removed null optional field '%s'",
+                            key,
+                        )
+                    continue
+
+                if isinstance(prop_schema, dict):
+                    cleaned[key] = walk(item, prop_schema)
+                else:
+                    cleaned[key] = item
+
+            return cleaned
+
+        if node_type == "array" and isinstance(value, list):
+            item_schema = node.get("items", {})
+            return [walk(item, item_schema) for item in value]
+
+        return value
+
+    return walk(ir, schema)
+
+
 def _normalize_structural_references(ir: Dict[str, Any]) -> Dict[str, Any]:
     """Repair only deterministic IR structure; never invent engineering meaning."""
     components = ir.get("components")
@@ -585,6 +659,8 @@ class SpecificationExtractor:
 
             client = self._get_client()
 
+            # Build the provider-compatible strict schema dynamically from
+            # the canonical IR schema. No field names are hard-coded here.
             raw = client.complete(
                 messages=messages,
                 temperature=config.ai.temperature,
@@ -594,9 +670,8 @@ class SpecificationExtractor:
                 # 8000 TPM organization limit.
                 max_tokens=5000,
 
-                # JSON mode is sufficient here.
-                # The local StructuredValidator performs the authoritative
-                # schema validation after the response is received.
+                # Groq receives the strict structured-output schema while the
+                # local StructuredValidator remains the authoritative check.
                 json_mode=True,
                 json_schema=None,
             )
@@ -848,6 +923,10 @@ class SpecificationExtractor:
         raw_ir = _normalize_string_lists(
             self._parse_json(raw_response)
         )
+        raw_ir = _normalize_optional_nulls(
+            raw_ir,
+            self._validator._schema,
+        )
         raw_ir = _normalize_structural_references(raw_ir)
 
         # Step 3: Structured + semantic validation.
@@ -899,6 +978,10 @@ class SpecificationExtractor:
 
             raw_ir = _normalize_string_lists(
                 self._parse_json(raw_response)
+            )
+            raw_ir = _normalize_optional_nulls(
+                raw_ir,
+                self._validator._schema,
             )
             raw_ir = _normalize_structural_references(raw_ir)
 
