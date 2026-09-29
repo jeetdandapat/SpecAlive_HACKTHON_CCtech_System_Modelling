@@ -239,25 +239,7 @@ def run_pipeline(
     client: Optional[BaseAIClient] = None,
     validator: Optional[StructuredValidator] = None,
 ) -> PipelineResult:
-    """Executes the complete Phase 1 pipeline.
-
-    Flow:
-        Specification
-            ↓
-        Input Reader
-            ↓
-        AI Extraction
-            ↓
-        Structured JSON
-            ↓
-        Validation
-            ↓
-        Audit
-            ↓
-        SysML Generation
-            ↓
-        Modelica Generation
-    """
+    
 
     # Initialize directories
     config.ensure_directories()
@@ -481,16 +463,7 @@ def run_pipeline(
             logger.info("Skipping Modelica because SysML generation did not succeed")
 
         # Return result.
-        #
-        # Requirement coverage is a review/traceability warning in Phase 1,
-        # not a hard pipeline failure. The structured validator above remains
-        # strict: invalid IR still raises ExtractionValidationError and stops
-        # the pipeline.
-        #
-        # Therefore:
-        #   - requirement_errors -> WARNING only
-        #   - sysml/modelica generation errors -> GENERATION_FAILED
-        #   - otherwise -> SUCCESS
+        
         pipeline_status = (
             PipelineStatus.GENERATION_FAILED
             if sysml_error or modelica_error

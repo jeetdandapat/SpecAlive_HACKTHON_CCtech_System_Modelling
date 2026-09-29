@@ -224,6 +224,201 @@ def _strip_json_fences(text: str) -> str:
     return text
 
 
+
+def _normalize_component_ids(ir: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize AI-generated component IDs to the canonical schema format."""
+    components = ir.get("components")
+    if not isinstance(components, list):
+        return ir
+
+    def sanitize(identifier: str) -> str:
+        identifier = str(identifier).strip()
+        identifier = re.sub(r"[^A-Za-z0-9_]", "_", identifier)
+        if not identifier:
+            identifier = "component"
+        if not re.match(r"^[A-Za-z]", identifier):
+            identifier = f"C_{identifier}"
+        return identifier
+
+    mapping: Dict[str, str] = {}
+    used: set[str] = set()
+    for component in components:
+        if not isinstance(component, dict) or component.get("id") is None:
+            continue
+        old_id = str(component["id"])
+        candidate = sanitize(old_id)
+        base = candidate
+        suffix = 2
+        while candidate in used:
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        used.add(candidate)
+        mapping[old_id] = candidate
+        if old_id != candidate:
+            logger.warning("Normalized invalid component id '%s' -> '%s'", old_id, candidate)
+
+    if not any(old != new for old, new in mapping.items()):
+        return ir
+
+    def replace_ref(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        for old_id, new_id in sorted(mapping.items(), key=lambda item: len(item[0]), reverse=True):
+            if value == old_id:
+                return new_id
+            if value.startswith(f"{old_id}."):
+                return f"{new_id}{value[len(old_id):]}"
+        return value
+
+    for component in components:
+        if not isinstance(component, dict):
+            continue
+        old_id = str(component.get("id", ""))
+        component["id"] = mapping.get(old_id, old_id)
+        ports = component.get("ports")
+        if isinstance(ports, list):
+            for port in ports:
+                if isinstance(port, dict) and isinstance(port.get("id"), str):
+                    port["id"] = replace_ref(port["id"])
+
+    connections = ir.get("connections")
+    if isinstance(connections, list):
+        for connection in connections:
+            if isinstance(connection, dict):
+                for field in ("source_port", "target_port"):
+                    if isinstance(connection.get(field), str):
+                        connection[field] = replace_ref(connection[field])
+
+    requirements = ir.get("requirements")
+    if isinstance(requirements, list):
+        for requirement in requirements:
+            if isinstance(requirement, dict) and isinstance(requirement.get("covered_by"), list):
+                requirement["covered_by"] = [replace_ref(x) for x in requirement["covered_by"]]
+
+    return ir
+
+
+def _normalize_requirement_references(ir: Dict[str, Any]) -> Dict[str, Any]:
+    """Remove unknown requirement traceability references without fabricating.
+
+    Requirements may reference only elements that actually exist in the IR:
+    component IDs, component.port IDs, parameter names, connection IDs,
+    state IDs, or transition IDs.
+
+    Unknown references are removed. The requirement is marked:
+      - partial, when at least one valid reference remains
+      - not_covered, when no valid reference remains
+
+    This is intentionally generic and does not special-case names such as
+    ``t0``.
+    """
+    requirements = ir.get("requirements")
+    if not isinstance(requirements, list):
+        return ir
+
+    valid_refs = set()
+
+    def add(value: Any) -> None:
+        if isinstance(value, str) and value.strip():
+            valid_refs.add(value.strip())
+
+    # Component-level and component-local elements.
+    components = ir.get("components")
+    if isinstance(components, list):
+        for component in components:
+            if not isinstance(component, dict):
+                continue
+
+            add(component.get("id"))
+
+            ports = component.get("ports")
+            if isinstance(ports, list):
+                for port in ports:
+                    if isinstance(port, dict):
+                        add(port.get("id"))
+
+            parameters = component.get("parameters")
+            if isinstance(parameters, list):
+                for parameter in parameters:
+                    if isinstance(parameter, dict):
+                        add(parameter.get("name"))
+
+            states = component.get("states")
+            if isinstance(states, list):
+                for state in states:
+                    if isinstance(state, dict):
+                        add(state.get("id"))
+
+            transitions = component.get("transitions")
+            if isinstance(transitions, list):
+                for transition in transitions:
+                    if isinstance(transition, dict):
+                        add(transition.get("id"))
+
+    # System-level elements.
+    parameters = ir.get("parameters")
+    if isinstance(parameters, list):
+        for parameter in parameters:
+            if isinstance(parameter, dict):
+                add(parameter.get("name"))
+
+    states = ir.get("states")
+    if isinstance(states, list):
+        for state in states:
+            if isinstance(state, dict):
+                add(state.get("id"))
+
+    transitions = ir.get("transitions")
+    if isinstance(transitions, list):
+        for transition in transitions:
+            if isinstance(transition, dict):
+                add(transition.get("id"))
+
+    connections = ir.get("connections")
+    if isinstance(connections, list):
+        for connection in connections:
+            if isinstance(connection, dict):
+                add(connection.get("id"))
+
+    # Clean requirement traceability references.
+    for requirement in requirements:
+        if not isinstance(requirement, dict):
+            continue
+
+        covered_by = requirement.get("covered_by")
+        if not isinstance(covered_by, list):
+            continue
+
+        valid = []
+        removed = []
+
+        for reference in covered_by:
+            if (
+                isinstance(reference, str)
+                and reference.strip() in valid_refs
+            ):
+                valid.append(reference.strip())
+            else:
+                removed.append(reference)
+
+        if removed:
+            logger.warning(
+                "Removed unknown requirement traceability references "
+                "from '%s': %s",
+                requirement.get("id", "<unknown>"),
+                removed,
+            )
+
+            requirement["covered_by"] = valid
+
+            if valid:
+                requirement["status"] = "partial"
+            else:
+                requirement["status"] = "not_covered"
+
+    return ir
+
+
 def _normalize_string_lists(ir: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize common compact AI shapes without asserting missing semantics."""
     # Keep IR collection fields canonical: local validators and generators
@@ -668,7 +863,7 @@ class SpecificationExtractor:
 
                 # Keep the initial extraction request within Groq's
                 # 8000 TPM organization limit.
-                max_tokens=5000,
+                max_tokens=4500,
 
                 # Groq receives the strict structured-output schema while the
                 # local StructuredValidator remains the authoritative check.
@@ -798,7 +993,9 @@ class SpecificationExtractor:
                     "PARTIAL IR:\n"
                     f"{compact_ir}\n\n"
                     "TASK:\n"
-                    "Return the complete repaired IR. "
+                    "Return the COMPLETE repaired IR as one JSON object. "
+                    "Keep descriptions and strings concise so the response "
+                    "fits the output limit; never truncate the JSON. "
                     "Ensure engineering elements supported by the source "
                     "are represented as components. Before returning JSON, "
                     "verify that every component has id, name, and non-empty "
@@ -815,15 +1012,20 @@ class SpecificationExtractor:
                 messages=messages,
                 temperature=0.0,
                 timeout=config.ai.timeout,
-                max_tokens=3500,
+                # Repair must return the complete IR. 3500 tokens can truncate
+                # a multi-component IR and cause Groq json_validate_failed.
+                max_tokens=5000,
                 json_mode=True,
                 json_schema=None,
             )
 
         except AIClientError as error:
-            raise ExtractionError(
-                f"AI IR repair request failed: {error}"
-            ) from error
+            logger.error(
+                "AI IR repair request failed; preserving original "
+                "validation result instead of hiding it: %s",
+                error,
+            )
+            raise
 
         if not response or not response.strip():
             raise ExtractionError(
@@ -920,14 +1122,15 @@ class SpecificationExtractor:
 
         # Step 2: Parse JSON
 
-        raw_ir = _normalize_string_lists(
-            self._parse_json(raw_response)
-        )
+        raw_ir = self._parse_json(raw_response)
+        raw_ir = _normalize_component_ids(raw_ir)
+        raw_ir = _normalize_string_lists(raw_ir)
         raw_ir = _normalize_optional_nulls(
             raw_ir,
             self._validator._schema,
         )
         raw_ir = _normalize_structural_references(raw_ir)
+        raw_ir = _normalize_requirement_references(raw_ir)
 
         # Step 3: Structured + semantic validation.
         validation_result = self._validator.validate(raw_ir)
@@ -946,6 +1149,11 @@ class SpecificationExtractor:
         )
 
         if needs_repair:
+            logger.warning(
+                "Validation details before repair:\n%s",
+                validation_result.summary(),
+            )
+
             if no_components:
                 logger.warning(
                     "AI extraction produced zero components; "
@@ -976,14 +1184,15 @@ class SpecificationExtractor:
                 len(raw_response),
             )
 
-            raw_ir = _normalize_string_lists(
-                self._parse_json(raw_response)
-            )
+            raw_ir = self._parse_json(raw_response)
+            raw_ir = _normalize_component_ids(raw_ir)
+            raw_ir = _normalize_string_lists(raw_ir)
             raw_ir = _normalize_optional_nulls(
                 raw_ir,
                 self._validator._schema,
             )
             raw_ir = _normalize_structural_references(raw_ir)
+            raw_ir = _normalize_requirement_references(raw_ir)
 
             validation_result = self._validator.validate(raw_ir)
 

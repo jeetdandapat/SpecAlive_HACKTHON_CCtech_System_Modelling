@@ -1,30 +1,31 @@
-Synthetic hackathon engineering evidence Page 1
-RM-201 Indoor Air Quality Control - Owner
-Requirements
-Document URS-IAQ-001 - Revision A - 2026-01-08
-1. Scope
-This specification defines the owner requirements for the RM-201 single-zone demand-controlled outdoor-air
-demonstration. The system shall represent a room, an outdoor-air source, an exhaust boundary, occupant
-CO2 generation, a room CO2 measurement, and a feedback controller that adjusts ventilation.
-2. Functional requirements
-URS-IAQ-001 - The room shall be represented as a single well-mixed air volume of 100 m3.
-URS-IAQ-002 - Outdoor air shall be supplied through a controlled airflow path and room air shall leave through an
-exhaust path.
-URS-IAQ-003 - The ventilation controller shall modulate fresh-air flow using measured room CO2 as feedback.
-URS-IAQ-004 - During the approved occupied schedule, room CO2 shall not exceed 1000 ppm.
-URS-IAQ-005 - The reference outdoor-air CO2 concentration shall be 300 ppm.
-URS-IAQ-006 - CO2 generation shall be proportional to the scheduled number of occupants.
-URS-IAQ-007 - The design occupant CO2 generation rate shall be 8.18E-6 kg/s per person.
-URS-IAQ-008 - The released demonstration shall support a peak occupancy of at least 12 persons. Final operations
-schedule to be issued separately.
-3. Control and verification expectations
-URS-IAQ-009 - A numerical simulation shall demonstrate the CO2 feedback behavior over a representative daily
-occupancy schedule.
-URS-IAQ-010 - Concentration and airflow quantities shall be represented with explicit engineering units or
-unambiguous normalization definitions.
-URS-IAQ-011 - The model shall distinguish physical outdoor-air flow direction from any implementation-specific
-source sign convention.
-URS-IAQ-012 - Verification evidence shall record occupant count, room CO2, outdoor CO2, commanded ventilation,
-and physical ventilation flow.
-Revision note. Rev A is the baseline owner document. Detailed controls tuning, the final occupancy schedule, and resolution of
-ambiguous wording may be established by later approved engineering records.
+System Requirement Specification - Quasi-Static
+Magnetic Circuit
+Released Rev A. Parameter values in later approved change records override conflicting values in this document.
+1. System purpose
+The benchmark magnetic circuit consists of a rectangular iron core with a square cross section, one discrete air
+gap, an exciting coil, a measuring coil located at the air-gap region, a useful-flux sensor, and a leakage-flux
+path. It is modeled using quasi-static magnetic flux tubes under a linear-reluctance assumption.
+2. Functional behavior
+A positive RMS current-phasor magnitude ramp through the exciting coil produces a positive magnetomotive
+force N*I. The resulting total core flux follows the defined positive magnetic direction. At the right-leg branch,
+total core flux divides into useful air-gap flux and leakage flux and rejoins before the lower yoke.
+Flux density B is derived from flux Phi and cross-sectional area. Magnetic field strength H is derived from B
+using the applicable permeability. Magnetic potential difference is H times mean flux-line length. The series
+magnetic potential drops plus the parallel air-gap/leakage branch drop balance the exciting-coil mmf.
+3. Released nominal geometry
+Item Value Notes
+a 25 mm Square iron cross-section side
+l 150 mm Reference mean geometry dimension from drawing
+delta 1.50 mm Nominal air-gap length
+Left/upper/lower iron length l-a Mean dashed flux line
+Right-leg iron length l-a-delta Air gap removed from iron length
+4. Quasi-static and induction requirements
+Flux, flux density, field strength, magnetic potential difference and electric quantities are represented by
+complex phasors. For the released linear elements, reluctance is real, so flux and magnetic potential difference
+share phasor angle.
+The exciting coil induced voltage has positive defined electric orientation; the measuring-coil voltage has
+negative orientation relative to the useful air-gap flux. Both follow the quasi-static relation |U| = 2*pi*f*N*|Phi|.
+5. Grounds and assumptions
+An electric ground and a magnetic ground shall both be present to establish reference potentials. Force
+interaction is out of scope. The core is linear in this benchmark; nonlinear saturation is handled only by a
+separate model variant and shall not be inferred into the baseline.
